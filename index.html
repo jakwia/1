@@ -162,14 +162,14 @@
 
     <div id="tab-tp" hidden>
       <div class="panel">
-        <h1>Tempo dostarczania (Throughput Daily)</h1>
-        <p>Wykres procesu: liczba zadań w czasie, średnia oraz granice średnia ± 2,66 × średni moving range.</p>
+        <h1>Tempo dostarczania (Throughput, tygodniowo)</h1>
+        <p>Wykres XMR (część X): tygodniowa liczba zadań (tygodnie od 7 stycznia), średnia oraz granice średnia ± 2,66 × średni moving range (dolna granica nie niższa niż 0).</p>
         <div class="metrics" id="tp-metrics"></div>
       </div>
       <div class="panel"><div id="tp-chart" style="height:480px"></div></div>
       <div class="panel">
         <h1>Zmienność (moving range)</h1>
-        <p>Moving range = |x<sub>i</sub> − x<sub>i−1</sub>|, średnia oraz granice ± 3,27 × średni moving range.</p>
+        <p>Moving range = |x<sub>i</sub> − x<sub>i−1</sub>|, średni MR oraz granice średni MR ± 3,27 × średni MR (dolna granica nie niższa niż 0).</p>
         <div id="mr-chart" style="height:480px"></div>
       </div>
       <p id="tp-status" style="color:var(--muted)"></p>
@@ -434,14 +434,23 @@
         const wb = XLSX.read(await res.arrayBuffer(), { type: "array" });
         const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 })
           .slice(1).filter((r) => typeof r[0] === "number" && typeof r[1] === "number");
-        const dates = rows.map((r) => toIsoDate(parseExcelDate(r[0])));
-        const y = rows.map((r) => r[1]);
+        const daily = rows.map((r) => ({ d: parseExcelDate(r[0]), v: r[1] })).sort((p, q) => p.d - q.d);
+        // Tygodnie 7-dniowe liczone od pierwszej daty (7 stycznia); niepełny ostatni tydzień pomijamy
+        const DAY = 86400000, t0 = daily[0].d.getTime();
+        const nWeeks = Math.floor(((daily[daily.length - 1].d.getTime() - t0) / DAY + 1) / 7);
+        const sums = new Array(nWeeks).fill(0);
+        daily.forEach(({ d, v }) => {
+          const w = Math.floor((d.getTime() - t0) / DAY / 7);
+          if (w < nWeeks) sums[w] += v;
+        });
+        const dates = sums.map((_, w) => toIsoDate(new Date(t0 + w * 7 * DAY)));
+        const y = sums;
         const mr = y.map((v, i) => (i ? Math.abs(v - y[i - 1]) : null));
         const mrVals = mr.filter((v) => v !== null);
         const mean = y.reduce((a, b) => a + b, 0) / y.length;
         const mrBar = mrVals.reduce((a, b) => a + b, 0) / mrVals.length;
-        const unpl = mean + 2.66 * mrBar, lnpl = mean - 2.66 * mrBar;
-        const uMr = 3.27 * mrBar, lMr = -3.27 * mrBar;
+        const unpl = mean + 2.66 * mrBar, lnpl = Math.max(0, mean - 2.66 * mrBar);
+        const uMr = mrBar + 3.27 * mrBar, lMr = Math.max(0, mrBar - 3.27 * mrBar);
 
         const line = (v, color, name, dash) => ({
           type: "scatter", mode: "lines", name, x: [dates[0], dates[dates.length - 1]], y: [v, v],
@@ -451,14 +460,13 @@
           paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(15,23,42,0.75)",
           font: { color: "#eef3ff" }, legend: { orientation: "h", y: 1.12 },
           margin: { l: 55, r: 20, t: 40, b: 60 },
-          xaxis: { title: "Okres czasu", type: "date", gridcolor: "rgba(148,163,184,0.18)" },
+          xaxis: { title: "Początek tygodnia", type: "date", gridcolor: "rgba(148,163,184,0.18)" },
           yaxis: { title: ytitle, gridcolor: "rgba(148,163,184,0.18)" }
         });
         const cfg = { responsive: true, displaylogo: false };
 
         Plotly.newPlot("tp-chart", [
-          { type: "scatter", mode: "lines+markers", name: "Liczba zadań", x: dates, y, line: { color: "#38bdf8" }, marker: { size: 5 } },
-          { type: "scatter", mode: "lines", name: "Moving range", x: dates, y: mr, line: { color: "#a78bfa", width: 1 } },
+          { type: "scatter", mode: "lines+markers", name: "Liczba zadań / tydzień", x: dates, y, line: { color: "#38bdf8" }, marker: { size: 5 } },
           line(mean, "#22c55e", "Średnia", "dot"),
           line(unpl, "#ef4444", "Górna granica (+2,66·mR̄)", "dash"),
           line(lnpl, "#ef4444", "Dolna granica (−2,66·mR̄)", "dash")
@@ -476,7 +484,7 @@
           `Granice ±2,66: <strong>${lnpl.toFixed(2)} … ${unpl.toFixed(2)}</strong>`,
           `Granice ±3,27: <strong>${lMr.toFixed(2)} … ${uMr.toFixed(2)}</strong>`
         ].map((t) => `<span>${t}</span>`).join("");
-        st.textContent = `Wczytano ${y.length} dni.`;
+        st.textContent = `Zagregowano ${daily.length} dni do ${y.length} pełnych tygodni.`;
       } catch (err) {
         st.textContent = err.message;
       }
